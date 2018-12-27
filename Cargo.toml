@@ -5,3 +5,6 @@ authors = ["Bo Jeanes <me@bjeanes.com>"]
 edition = "2018"
 
 [dependencies]
+syslog_heroku = "0.1.0"
+rouille = "3.0.0"
+
