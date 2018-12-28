@@ -1,6 +1,12 @@
-use std::{io,env};
+use std::{io, env};
 use std::io::Read;
-use rouille::{Response,Request,Server,router};
+use rouille::{
+    Request,
+    Response,
+    Server,
+    assert_or_400,
+    router,
+};
 
 fn main() -> () {
     let host = match env::var("PORT") {
@@ -32,24 +38,47 @@ fn main() -> () {
 
 const BODY_LIMIT: usize = 1024 * 1024;
 
+fn internal_error() -> Response {
+    Response::text("Internal Error").with_status_code(500)
+}
+
 fn handle_logs(request: &Request, _app: String) -> Response {
-    let body = match request.data() {
-        Some(b) => b,
-        None => return Response::text("Internal Error").with_status_code(500),
-    };
+    assert_or_400!(
+        ( request.header("Content-Length").unwrap().parse::<usize>().unwrap() ) <= BODY_LIMIT
+    );
 
-    let mut out = Vec::new();
-    match body.take(BODY_LIMIT.saturating_add(1) as u64).read_to_end(&mut out) {
-        Err(_) => return Response::text("Internal Error").with_status_code(500),
-        _ => {},
-    };
+    match request.header("Content-Type") {
+        Some("application/logplex-1") => {
+            let body = match request.data() {
+                Some(b) => b,
+                None => return internal_error(),
+            };
 
-    let body = match String::from_utf8(out) {
-        Ok(o) => o,
-        _ => return Response::text("Internal Error").with_status_code(500),
-    };
+            let mut out = Vec::new();
+            match body.take(BODY_LIMIT.saturating_add(1) as u64).read_to_end(&mut out) {
+                Err(_) => return internal_error(),
+                _ => {},
+            };
 
-    println!("{}", body);
+            if out.len() > BODY_LIMIT {
+                return Response::empty_400()
+            }
 
-    Response::text("OK")
+            let body = match String::from_utf8(out) {
+                Ok(o) => o,
+                _ => return internal_error(),
+            };
+
+            println!("{}", body);
+
+            Response::text("OK")
+        },
+        Some(ct) => {
+            Response::text(format!("Unexpected Content-Type: {}", ct)).with_status_code(400)
+        },
+        _ => {
+            Response::text("Missing Content-Type").with_status_code(400)
+        }
+    }
+
 }
