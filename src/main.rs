@@ -1,19 +1,18 @@
 use std::{io,env};
-use rouille::{Response,Server,router};
+use std::io::Read;
+use rouille::{Response,Request,Server,router};
 
 fn main() -> () {
-    let port = match env::var("PORT") {
-        Ok(val) => val,
-        Err(_) => "0".to_string(),
+    let host = match env::var("PORT") {
+        Ok(port) => format!("0.0.0.0:{}", port),
+        _ => "0.0.0.0:0".to_string(),
     };
-
-    let host = format!("0.0.0.0:{}", port);
 
     let server = Server::new(host, move |request| {
         rouille::log(request, io::stdout(), || {
             router!(request,
-                (POST) (/logs/{_app: String}) => {
-                    Response::text("OK")
+                (POST) (/logs/{app: String}) => {
+                    handle_logs(&request, app)
                 },
 
                 _ => {
@@ -29,4 +28,28 @@ fn main() -> () {
     }
 
     server.run();
+}
+
+const BODY_LIMIT: usize = 1024 * 1024;
+
+fn handle_logs(request: &Request, _app: String) -> Response {
+    let body = match request.data() {
+        Some(b) => b,
+        None => return Response::text("Internal Error").with_status_code(500),
+    };
+
+    let mut out = Vec::new();
+    match body.take(BODY_LIMIT.saturating_add(1) as u64).read_to_end(&mut out) {
+        Err(_) => return Response::text("Internal Error").with_status_code(500),
+        _ => {},
+    };
+
+    let body = match String::from_utf8(out) {
+        Ok(o) => o,
+        _ => return Response::text("Internal Error").with_status_code(500),
+    };
+
+    println!("{}", body);
+
+    Response::text("OK")
 }
