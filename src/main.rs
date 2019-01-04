@@ -134,7 +134,7 @@ fn next_message(body: &mut BufRead) -> Result<LogplexMessage, ParseErr> {
 #[cfg(test)]
 mod tests {
     use super::next_message;
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::BufReader;
     use stringreader::StringReader;
 
     #[test]
