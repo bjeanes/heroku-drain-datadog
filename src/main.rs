@@ -114,13 +114,6 @@ fn handle_logs(request: &Request, _app: String) -> Response {
 
             println!("{:?}", message);
 
-            // let mut messages = body.lines().map(|line| {
-            //     println!("{:?}", line);
-            //     line.parse::<LogplexMessage>()
-            // });
-            //
-            // println!("{:?}", messages.next());
-
             Response::empty_204()
         }
         Some(ct) => {
