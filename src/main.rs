@@ -37,6 +37,9 @@ const BODY_LIMIT: usize = 1024 * 1024;
 fn internal_error() -> Response {
     Response::text("Internal Error").with_status_code(500)
 }
+fn internal_error_with_message(body: &str) -> Response {
+    Response::text(format!("Internal Error: {}", body)).with_status_code(500)
+}
 
 fn handle_logs(request: &Request, _app: String) -> Response {
     assert_or_400!(
@@ -64,61 +67,93 @@ fn handle_logs(request: &Request, _app: String) -> Response {
                 _ => {}
             };
 
+            println!("Request body size: {}", out.len());
+
             if out.len() > BODY_LIMIT {
                 return Response::empty_400();
             }
 
             let mut body = BufReader::new(&out[..]);
 
-            println!("{:?}", &out);
-            println!("{:?}", str::from_utf8(&out));
-
-            let mut buf: Vec<u8> = Vec::new();
-            let mut buf2: Vec<u8> = Vec::new();
-            let message = match body.read_until(b' ', &mut buf) {
-                Err(_) => return internal_error(),
-                Ok(matched_bytes) => {
-                    let message_size: u64 = {
-                        println!("body BufReader: {:?}", &body);
-                        println!("buffer contents: {:?}", &buf);
-                        let bytes_string = &buf[0..matched_bytes];
-                        println!("matched_bytes: {:?}", bytes_string);
-                        match str::from_utf8(bytes_string) {
-                            Ok(s) => match s.trim().parse::<u64>() {
-                                Ok(size) => {
-                                    println!("message size: {}", size);
-                                    size
-                                }
-                                _ => return internal_error(),
-                            },
-                            _ => return internal_error(),
-                        }
-                    };
-
-                    {
-                        let mut take = body.take(message_size);
-                        println!("{:?}", take);
-                        match take.read_to_end(&mut buf2) {
-                            Ok(_) => match &str::from_utf8(&buf2) {
-                                Ok(s) => match s.parse::<LogplexMessage>() {
-                                    Ok(msg) => msg,
-                                    _ => return internal_error(),
-                                },
-                                _ => return internal_error(),
-                            },
-                            _ => return internal_error(),
-                        }
-                    }
+            match next_message(&mut body) {
+                Ok(message) => {
+                    println!("Message: {:?}", message);
+                    Response::empty_204()
                 }
-            };
-
-            println!("{:?}", message);
-
-            Response::empty_204()
+                Err(e) => internal_error_with_message(&format!("{:?}", e)),
+            }
         }
         Some(ct) => {
             Response::text(format!("Unexpected Content-Type: {}", ct)).with_status_code(400)
         }
         _ => Response::text("Missing Content-Type").with_status_code(400),
+    }
+}
+
+#[derive(Debug)]
+enum ParseErr {
+    FailedToReadMessageSize,
+    FailedToParseMessageSize,
+    GenericError,
+}
+fn next_message(body: &mut BufRead) -> Result<LogplexMessage, ParseErr> {
+    let mut buf: Vec<u8> = Vec::new(); // TODO: rename
+    let mut buf2: Vec<u8> = Vec::new(); // TODO: rename
+    match body.read_until(b' ', &mut buf) {
+        Err(_) => return Err(ParseErr::FailedToReadMessageSize),
+        Ok(matched_bytes) => {
+            let message_size: u64 = {
+                let bytes_string = &buf[0..matched_bytes];
+                match str::from_utf8(bytes_string) {
+                    Ok(s) => match s.trim().parse::<u64>() {
+                        Ok(size) => {
+                            println!("message size: {}", size);
+                            size
+                        }
+                        _ => return Err(ParseErr::FailedToParseMessageSize),
+                    },
+                    _ => return Err(ParseErr::FailedToParseMessageSize),
+                }
+            };
+
+            let mut take = body.take(message_size);
+            match take.read_to_end(&mut buf2) {
+                Ok(_) => match &str::from_utf8(&buf2) {
+                    Ok(s) => match s.parse::<LogplexMessage>() {
+                        Ok(msg) => Ok(msg),
+                        _ => return Err(ParseErr::GenericError),
+                    },
+                    _ => return Err(ParseErr::GenericError),
+                },
+                _ => return Err(ParseErr::GenericError),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_message;
+    use std::io::{BufRead, BufReader, Read};
+    use stringreader::StringReader;
+
+    #[test]
+    fn it_parses_messages_from_bufreader() {
+        let sample_body = include_str!("../test/sample-body");
+        let mut body = BufReader::new(StringReader::new(sample_body));
+
+        let msg1 = next_message(&mut body);
+        let msg2 = next_message(&mut body);
+        let msg3 = next_message(&mut body);
+
+        assert!(msg1.is_ok());
+        assert!(msg2.is_ok());
+        assert!(!msg3.is_ok());
+
+        assert_eq!(msg1.unwrap().msg, "State changed from starting to up\r");
+        assert_eq!(
+            msg2.unwrap().msg,
+            "Starting process with command `bundle exec rackup config.ru -p 24405`\r"
+        );
     }
 }
