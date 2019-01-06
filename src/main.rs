@@ -75,12 +75,14 @@ fn handle_logs(request: &Request, _app: String) -> Response {
 
             let mut body = BufReader::new(&out[..]);
 
-            match next_message(&mut body) {
-                Ok(message) => {
-                    println!("Message: {:?}", message);
-                    Response::empty_204()
+            loop {
+                match next_message(&mut body) {
+                    Ok(message) => {
+                        println!("Message: {:?}", message);
+                    }
+                    Err(ParseErr::NoMoreMessages) => return Response::empty_204(),
+                    Err(e) => return internal_error_with_message(&format!("{:?}", e)),
                 }
-                Err(e) => internal_error_with_message(&format!("{:?}", e)),
             }
         }
         Some(ct) => {
@@ -95,30 +97,37 @@ enum ParseErr {
     FailedToReadMessageSize,
     FailedToParseMessageSize,
     GenericError,
+    NoMoreMessages,
 }
 fn next_message(body: &mut BufRead) -> Result<LogplexMessage, ParseErr> {
-    let mut buf: Vec<u8> = Vec::new(); // TODO: rename
-    let mut buf2: Vec<u8> = Vec::new(); // TODO: rename
-    match body.read_until(b' ', &mut buf) {
+    let mut message_size_buffer: Vec<u8> = Vec::new();
+    let mut message_buffer: Vec<u8> = Vec::new();
+    match body.read_until(b' ', &mut message_size_buffer) {
         Err(_) => return Err(ParseErr::FailedToReadMessageSize),
         Ok(matched_bytes) => {
             let message_size: u64 = {
-                let bytes_string = &buf[0..matched_bytes];
+                let bytes_string = &message_size_buffer[0..matched_bytes];
                 match str::from_utf8(bytes_string) {
                     Ok(s) => match s.trim().parse::<u64>() {
                         Ok(size) => {
                             println!("message size: {}", size);
                             size
                         }
-                        _ => return Err(ParseErr::FailedToParseMessageSize),
+                        Err(_) => {
+                            if s.trim() == "" {
+                                return Err(ParseErr::NoMoreMessages);
+                            } else {
+                                return Err(ParseErr::FailedToParseMessageSize);
+                            }
+                        }
                     },
                     _ => return Err(ParseErr::FailedToParseMessageSize),
                 }
             };
 
             let mut take = body.take(message_size);
-            match take.read_to_end(&mut buf2) {
-                Ok(_) => match &str::from_utf8(&buf2) {
+            match take.read_to_end(&mut message_buffer) {
+                Ok(_) => match &str::from_utf8(&message_buffer) {
                     Ok(s) => match s.parse::<LogplexMessage>() {
                         Ok(msg) => Ok(msg),
                         _ => return Err(ParseErr::GenericError),
